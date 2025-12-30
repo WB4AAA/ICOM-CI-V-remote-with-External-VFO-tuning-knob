@@ -1,0 +1,240 @@
+////////////////////////////////////////////////////////////////////////////////
+// ICOM CI-V Parameters Read file
+// Created by WB4AAA
+////////////////////////////////////////////////////////////////////////////////
+
+#include <windows.h>
+#include <stdio.h>
+#include <setupapi.h>
+#include "stm32.h"
+#include "icomradioinfo.h"
+#include <initguid.h>
+#include <devguid.h>
+
+//#include "Unit1.h"
+char *v1="0483";
+char *p1="5740";
+char *Port_STM;
+HANDLE hKnob;
+DWORD KnobRead, KnobWrite;
+COMMTIMEOUTS knobtimeouts;
+DCB knobdcb;
+HANDLE USB_KNOB;
+HANDLE READ_PORT;
+HANDLE PORTCON;
+HANDLE PORTSCAN;
+char buffer[100];
+bool Connecting=false;
+bool Connected=false;
+bool readThreadRun=false;
+//extern void Decode (char *a);
+
+bool PortSearch()
+{
+//GUID ClassGuid={0x4D36E978, 0xE325, 0x11CE, 0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18} ;
+GUID ClassGuid={0x86E0D1E0, 0x8089, 0x11D0, 0x9C, 0xE4, 0x08, 0x00, 0x3E, 0x30, 0x1F, 0x73};
+HDEVINFO hDevInfo1 = SetupDiGetClassDevs(&ClassGuid, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE );
+//HDEVINFO hDevInfo = SetupDiGetClassDevs(&GUID_DEVCLASS_PORTS, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE );
+LPCSTR path;
+char dev_name[1024];
+
+SP_DEVICE_INTERFACE_DATA         spdid;
+SP_DEVINFO_DATA                  spdd;
+spdd.cbSize = sizeof(SP_DEVINFO_DATA);
+spdid.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+DWORD dwIndex = 0;
+DWORD dwSize = 0;
+
+
+       for(int i = 0; SetupDiEnumDeviceInfo(hDevInfo1, i, &spdd); i++)
+       {
+        SetupDiGetDeviceRegistryPropertyA(hDevInfo1, &spdd, SPDRP_HARDWAREID, NULL, dev_name, sizeof(dev_name), NULL);
+        char vid[5];
+        char pid[5];
+        memset(vid, 0, 5);
+        memset(pid, 0, 5);
+        for (int j=0; j<4; j++)
+        {
+         vid[j]=dev_name[8+j];
+         pid[j]=dev_name[17+j];
+        }
+
+        int r1=memcmp(v1, vid, 4);
+        int r2=memcmp(p1, pid, 4);
+
+        if ((r1==0)&&(r2==0))
+        {
+
+          SetupDiEnumDeviceInterfaces( hDevInfo1, NULL, &ClassGuid, dwIndex, &spdid ) ;
+          SetupDiGetDeviceInterfaceDetail(hDevInfo1, &spdid, NULL, 0, &dwSize, NULL );
+          PSP_DEVICE_INTERFACE_DETAIL_DATA pspdidd;
+          pspdidd = ( PSP_DEVICE_INTERFACE_DETAIL_DATA)malloc(dwSize);
+          pspdidd->cbSize = sizeof( SP_DEVICE_INTERFACE_DETAIL_DATA ); // 5 Bytes!
+          SetupDiGetDeviceInterfaceDetail(hDevInfo1, &spdid, pspdidd, dwSize, &dwSize, NULL );
+          Port_STM=pspdidd->DevicePath;
+          SetupDiDestroyDeviceInfoList(hDevInfo1);
+          return 1;
+
+        }
+       dwIndex++;           }
+
+       SetupDiDestroyDeviceInfoList(hDevInfo1);
+       return 0;
+}
+
+bool PortScan()
+{
+GUID ClassGuid={0x86E0D1E0, 0x8089, 0x11D0, 0x9C, 0xE4, 0x08, 0x00, 0x3E, 0x30, 0x1F, 0x73};
+HDEVINFO hDevInfo = SetupDiGetClassDevs(&ClassGuid, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE );
+LPCSTR path;
+char dev_name[1024];
+
+SP_DEVICE_INTERFACE_DATA         spdid;
+SP_DEVINFO_DATA                  spdd;
+spdd.cbSize = sizeof(SP_DEVINFO_DATA);
+spdid.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+DWORD dwIndex = 0;
+DWORD dwSize = 0;
+
+
+       for(int i = 0; SetupDiEnumDeviceInfo(hDevInfo, i, &spdd); i++)
+       {
+       SetupDiGetDeviceRegistryPropertyA(hDevInfo, &spdd, SPDRP_HARDWAREID, NULL, dev_name, sizeof(dev_name), NULL);
+       char vid[5];
+       char pid[5];
+       for (int j=0; j<4; j++)
+       {
+       vid[j]=dev_name[8+j];
+       pid[j]=dev_name[17+j];
+       }
+
+       int r1=memcmp(v1, vid, 4);
+       int r2=memcmp(p1, pid, 4);
+
+       if ((r1==0)&&(r2==0))
+       {
+       SetupDiDestroyDeviceInfoList(hDevInfo);
+       return 1;
+       }
+       dwIndex++;             }
+       SetupDiDestroyDeviceInfoList(hDevInfo);
+       return 0;
+}
+
+
+DWORD WINAPI ReadPort(LPVOID)
+{
+        DWORD BytesRead;
+        COMSTAT comstat;
+        DWORD errors;
+
+        while (readThreadRun==true)
+        {
+            ClearCommError(hKnob, &errors, &comstat);
+            DWORD btr = comstat.cbInQue;
+
+            if (btr > 0)
+            {
+              //portFree=false;
+              if (btr > 1024)
+              {  btr = 1024;}
+
+              BOOL ok = ReadFile(hKnob, buffer, btr, &KnobRead, NULL);
+              //if (ok && BytesRead > 0)
+              if (ok)
+              {
+                //EnterCriticalSection(&ComLock);
+                //BytesRemove2(buffer, BytesRead);  // your data handler
+                //LeaveCriticalSection(&ComLock);
+                //Decode(buffer);
+
+              }
+
+
+              //portFree=true;
+            }
+            Sleep(1);
+        }
+          return 0;
+}
+
+bool PortCreate()
+{
+        hKnob=CreateFile(Port_STM, GENERIC_READ|GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0,  NULL);
+
+        if (Port_STM==INVALID_HANDLE_VALUE)
+        {
+        MessageBox(NULL, "ERROR", " ", MB_OK);
+        return 0;
+        }
+
+        knobdcb.BaudRate = 115200;
+        knobdcb.ByteSize = 8;
+        knobdcb.StopBits = ONESTOPBIT;
+        knobdcb.Parity = NOPARITY;
+        SetCommState(hKnob, &knobdcb);
+
+        knobtimeouts.ReadIntervalTimeout = 10;
+        knobtimeouts.ReadTotalTimeoutMultiplier = 10;
+        knobtimeouts.ReadTotalTimeoutConstant = 10;
+        knobtimeouts.WriteTotalTimeoutMultiplier = 10;
+        knobtimeouts.WriteTotalTimeoutConstant = 10;
+        SetCommTimeouts(hKnob, &knobtimeouts);
+        char d[4]={0, 0, 0, 1};
+        WriteFile(hKnob, d, 4, &KnobWrite, NULL);
+        //readThreadRun=true;
+        //READ_PORT = CreateThread(NULL, 0, ReadPort, NULL, 0, NULL);
+        return 1;
+}
+
+DWORD WINAPI PortScan(LPVOID)
+{
+        while(Connecting==true)
+        {
+         if (PortScan() == true) { Sleep(10);}
+         else
+         {
+          readThreadRun=false;
+          Connected=false;
+          Sleep(500);
+          //TerminateThread(READ_PORT, 0);
+          CloseHandle(READ_PORT);
+          CloseHandle(hKnob);
+          Connecting=false;
+          ResumeThread(PORTCON);
+          CloseHandle(PORTSCAN);
+         }
+        }
+}
+
+DWORD WINAPI PortCon(LPVOID)
+{
+        //Connected = false;
+        while(Connected==false)
+        {
+        Connected = PortSearch();
+        if (Connected==false) { Sleep(1); }
+        else
+        {
+           bool fg = PortCreate();
+           if (fg = false) { Sleep(5); }
+           else
+           {
+           PORTSCAN = CreateThread(NULL, 0, PortScan, NULL, 0, NULL);
+           readThreadRun=true;
+           Connecting=true;
+           READ_PORT = CreateThread(NULL, 0, ReadPort, NULL, 0, NULL);
+           SuspendThread(PORTCON);
+           }
+        }
+        }
+}
+
+void KnobInit()
+{
+   Connected=false;
+   PORTCON = CreateThread(NULL, 0, PortCon, NULL, 0, NULL);
+}
+
+
+

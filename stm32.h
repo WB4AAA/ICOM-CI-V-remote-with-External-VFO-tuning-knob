@@ -1,0 +1,20 @@
+////////////////////////////////////////////////////////////////////////////////
+// ICOM CI-V Parameters Read file
+// Created by WB4AAA
+////////////////////////////////////////////////////////////////////////////////
+
+
+#ifndef STM32_H
+#define STM32_H
+
+#include <windows.h>
+#include <vcl.h>
+#include <string>
+#include <stdio.h>
+#include <setupapi.h>
+#include "Unit1.h"
+
+void KnobInit();
+bool PortSearch();
+
+#endif

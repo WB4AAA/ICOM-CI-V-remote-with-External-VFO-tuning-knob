@@ -1,0 +1,476 @@
+//---------------------------------------------------------------------------
+
+#include <vcl.h>
+#pragma hdrstop
+
+#include "Unit1.h"
+#include "icomradioinfo.h"
+#include <setupapi>
+#include "stm32.h"
+//---------------------------------------------------------------------------
+#pragma package(smart_init)
+#pragma resource "*.dfm"
+TForm1 *Form1;
+
+        HANDLE hComm;
+        DWORD BytesRead, BytesWrite;
+        COMMTIMEOUTS commtimeouts, knobtimeouts;
+        DCB dcb, knobdcb;
+        String Port;
+        char buffer[100];
+        char knobData[10];
+        DWORD KnobRead, KnobWrite;
+        HANDLE hKnob;
+        String Port_STM;
+        void Decode(char *a);
+        char read_f[6]={0xfe, 0xfe, 0, 0xe0, 0x03, 0xfd};
+        int RadioID;
+        int timeOuts;
+        int retryLimit;
+        String VFO;
+        extern bool readThreadRun;
+
+        char ID[100];
+        char vfoData[100];
+
+        char signalData[100];
+
+        char ritData[100];
+        int ritStatus;
+        char ritFreq[100];
+        char afVolume[100];
+        char rfVolume[100];
+        int Vfo;
+        bool direction;
+        int Step;
+
+        bool refresh=false;
+        bool pauseThread=false;
+        HANDLE hPauseEvent=CreateEvent(NULL, FALSE, FALSE, NULL);
+
+        void Paused()
+        {
+          if (pauseThread==true)
+             {
+                SetEvent(hPauseEvent);
+                while(pauseThread==true)
+                {
+                Sleep(1);
+                }
+             }
+        }
+
+
+        HANDLE READ_INFO;
+        bool radioConnected=false;
+        DWORD WINAPI ReadInfo(LPVOID)
+        {
+
+           if (!vfo_a_b(hComm, RadioID, Vfo)) { } //else {Vfo=1;}
+           while(radioConnected == true)
+           {
+           Paused();
+           refresh = false;
+           if (!read_vfo(hComm, RadioID, vfoData)) { }
+           Paused();
+           if (!signal_read(hComm, RadioID, signalData)) { }
+           Paused();
+           if (!rit_status(hComm, RadioID, ritData)) { }
+           Paused();
+           if (!rit_read_f(hComm, RadioID, ritFreq)) { }
+           Paused();
+           if (!read_af(hComm, RadioID, afVolume)) { }
+           Paused();
+           if (!read_rf(hComm, RadioID, rfVolume)) { }
+           refresh = true;
+           Sleep(2);
+           }
+        }
+
+        HANDLE READ_FILE;
+        bool dataRead=false;
+
+
+
+
+        HANDLE DELAY;
+        int ms=0;
+        HANDLE hDelayEvent;
+        bool run = true;
+
+        DWORD WINAPI Delay(LPVOID)
+        {
+            while (ms>0)
+            {
+            ms=ms-1;
+            Sleep(1);
+            }
+            pauseThread=false;
+            CloseHandle(DELAY);
+        }
+
+
+
+        void Decode(char *a)
+        {
+
+          char zero[4] = {0, 0, 0, 0};
+
+
+          char vfoUp[4]={0, 0, 0, 1};
+          char vfoDown[4]={0, 0, 0, 2};
+          if (memcmp(a, zero, 4)==0) { return; }
+
+          if (ms>0) {  } else {ms=200; DELAY = CreateThread(NULL, 0, Delay, NULL, 0, NULL); pauseThread=true; WaitForSingleObject(hPauseEvent, INFINITE); }
+
+          refresh=false;
+          if (memcmp(a, vfoUp, 4) == 0)
+          {
+
+            direction=true;
+
+            ms=50;
+            Sleep(2);
+            write_vfo(hComm, RadioID, vfoData, Step, direction);
+
+            Sleep(2);
+          }
+          else
+          if (memcmp(a, vfoDown, 4) == 0)
+          {
+
+            direction=false;
+
+            ms=50;
+            Sleep(2);
+            write_vfo(hComm, RadioID, vfoData, Step, direction);
+
+            Sleep(2);
+
+          }
+          refresh=true;
+        }
+
+        HANDLE CHECK_KNOB;
+        DWORD WINAPI CheckKnob(LPVOID)
+        {
+
+            while(1)
+            {
+               
+
+               Decode(knobData);
+
+               memset(knobData, 0, 4);
+               Sleep(1);
+            }
+
+        }
+
+//---------------------------------------------------------------------------
+__fastcall TForm1::TForm1(TComponent* Owner)
+        : TForm(Owner)
+{
+
+
+        ComboBox2->Items->Add("1200");
+        ComboBox2->Items->Add("2400");
+        ComboBox2->Items->Add("4800");
+        ComboBox2->Items->Add("9600");
+        ComboBox2->Items->Add("19200");
+        ComboBox2->Items->Add("38400");
+        ComboBox2->Items->Add("57600");
+        ComboBox2->Items->Add("115200");
+
+        ComboBox2->ItemIndex=0;
+
+        ComboBox3->Items->Add("10");
+        ComboBox3->Items->Add("100");
+        ComboBox3->Items->Add("10000");
+        ComboBox3->Items->Add("10000");
+
+        ComboBox3->ItemIndex=0;
+
+        Vfo=0;
+        Step=StrToInt(ComboBox3->Text);
+        CHECK_KNOB = CreateThread(NULL, 0, CheckKnob, NULL, CREATE_SUSPENDED, NULL);
+        
+        Form1->DoubleBuffered=true;
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TForm1::Button1Click(TObject *Sender)
+{
+
+        if (Button1->Caption=="Connect")
+        {
+
+        Port="\\\\.\\"+ComboBox1->Text;
+        int len=ComboBox1->Text.Length();
+        String P1="(COM";
+        String P2;
+        int r1;
+        int r2=1;
+        while ((r1!=0)||(r2<len-5))
+        //while (r1!=0)
+        {
+          P2=ComboBox1->Text.SubString(r2, 4);
+          if (P1==P2) {r1=0;}
+          else {r2=r2+1;}
+        }
+        if (r2>=len-4) {return;}
+
+        P2=ComboBox1->Text.SubString(r2+1, len-r2-1);
+
+
+        Port="\\\\.\\"+P2;
+        hComm=CreateFile(Port.c_str(), GENERIC_READ|GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0,  NULL);
+
+        if (hComm==INVALID_HANDLE_VALUE)
+        {
+        MessageBox(NULL, "ERROR", " ", MB_OK);
+        return;
+        }
+
+        dcb.BaudRate = StrToInt(ComboBox2->Text);
+        dcb.ByteSize = 8;
+        dcb.StopBits = ONESTOPBIT;
+        dcb.Parity = NOPARITY;
+        SetCommState(hComm, &dcb);
+
+        if ( dcb.BaudRate == 1200) {timeOuts=150;}
+        if ( dcb.BaudRate == 2400) {timeOuts=80;}
+        if ( dcb.BaudRate == 4800) {timeOuts=50;}
+        if ( dcb.BaudRate == 9600) {timeOuts=30;}
+        if ( dcb.BaudRate == 19200) {timeOuts=20;}
+        else {timeOuts=10;}
+
+        commtimeouts.ReadIntervalTimeout = timeOuts;
+        commtimeouts.ReadTotalTimeoutMultiplier = timeOuts;
+        commtimeouts.ReadTotalTimeoutConstant = timeOuts;
+        commtimeouts.WriteTotalTimeoutMultiplier = timeOuts;
+        commtimeouts.WriteTotalTimeoutConstant = timeOuts;
+
+        SetCommTimeouts(hComm, &commtimeouts);
+
+        RadioID=StrToInt(Edit2->Text);
+
+        if (!radio_id(hComm, RadioID, ID)) {return;}
+        radioConnected=true;
+        READ_INFO=CreateThread(NULL, 0, ReadInfo, NULL, 0, NULL);
+        ResumeThread(CHECK_KNOB);
+        KnobInit();
+        refresh = false;
+        Timer1->Enabled=true;
+        Button1->Caption="Disconnect";              
+        return;
+        }
+        if (Button1->Caption=="Disconnect")
+        {
+        radioConnected=false;
+        Sleep(1000);
+        CloseHandle(READ_INFO);
+        CloseHandle(hComm);
+
+        Button1->Caption="Connect";
+        return;
+        }
+
+}
+//---------------------------------------------------------------------------
+void __fastcall TForm1::Button2Click(TObject *Sender)
+{
+        bool prt=PortSearch();
+        if (prt==false) { }
+        else { Label10->Caption="Found";}
+}
+//---------------------------------------------------------------------------
+void __fastcall TForm1::Timer1Timer(TObject *Sender)
+{
+       if (refresh==false) {return;}
+       //if (TryEnterCriticalSection(&DataLock))
+       //{
+
+
+       String Info;
+       Label5->Caption=vfoData;
+
+       Info=signalData;
+       ProgressBar1->Position=StrToInt(Info);
+       
+
+
+       ritStatus=StrToInt(ritData);
+       //bool ritStatus=false;
+       if (ritStatus==0)
+       {
+       Label8->Enabled=false;
+       Label9->Enabled=false;
+       SpeedButton3->Enabled=false;
+       SpeedButton4->Enabled=false;
+       }
+       if (ritStatus==1)
+       {
+       Label8->Enabled=true;
+       Label9->Enabled=true;
+       SpeedButton3->Enabled=true;
+       SpeedButton4->Enabled=true;
+       }
+
+       Label9->Caption=ritFreq;
+       //LeaveCriticalSection(&DataLock);
+      //}
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TForm1::Timer2Timer(TObject *Sender)
+{
+
+
+        ComboBox1->Items->Clear();
+        GUID ClassGuid={0x86E0D1E0, 0x8089, 0x11D0, 0x9C, 0xE4, 0x08, 0x00, 0x3E, 0x30, 0x1F, 0x73};
+        HDEVINFO hDevInfo = SetupDiGetClassDevs(&ClassGuid, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE );
+        if (hDevInfo==NULL) { return;}
+        LPCSTR path;
+        char dev_name[1024];            
+
+        SP_DEVICE_INTERFACE_DATA         spdid;
+        SP_DEVINFO_DATA                  spdd;
+        spdd.cbSize = sizeof(SP_DEVINFO_DATA);
+        spdid.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+        DWORD dwIndex = 0;
+        DWORD dwSize = 0;
+
+        for(int i = 0; SetupDiEnumDeviceInfo(hDevInfo, i, &spdd); i++)
+        {
+          SetupDiGetDeviceRegistryPropertyA(hDevInfo, &spdd, SPDRP_FRIENDLYNAME, NULL, dev_name, sizeof(dev_name), NULL);
+
+          ComboBox1->Items->Add(dev_name);
+        }
+        dwIndex++;
+        SetupDiDestroyDeviceInfoList(hDevInfo);
+        if (ComboBox1->Items==0) {return;}
+        ComboBox1->ItemIndex=0;
+        Timer2->Enabled=false;
+}
+//---------------------------------------------------------------------------
+
+
+
+void __fastcall TForm1::Timer3Timer(TObject *Sender)
+{
+        refresh=false;
+        write_vfo(hComm, RadioID, vfoData, Step, direction);
+        refresh=true;
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TForm1::SpeedButton1MouseDown(TObject *Sender,
+      TMouseButton Button, TShiftState Shift, int X, int Y)
+{
+        direction=false;
+        pauseThread=true;
+        Step=StrToInt(ComboBox3->Text);
+        WaitForSingleObject(hPauseEvent, INFINITE);
+        Timer3->Enabled=true;
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TForm1::SpeedButton1MouseUp(TObject *Sender,
+      TMouseButton Button, TShiftState Shift, int X, int Y)
+{
+        Timer3->Enabled=false;
+        pauseThread=false;
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TForm1::SpeedButton2MouseDown(TObject *Sender,
+      TMouseButton Button, TShiftState Shift, int X, int Y)
+{
+        direction=true;
+        pauseThread=true;
+        Step=StrToInt(ComboBox3->Text);
+        WaitForSingleObject(hPauseEvent, INFINITE);
+        Timer3->Enabled=true;        
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TForm1::SpeedButton2MouseUp(TObject *Sender,
+      TMouseButton Button, TShiftState Shift, int X, int Y)
+{
+        Timer3->Enabled=false;
+        pauseThread=false;
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TForm1::SpeedButton5Click(TObject *Sender)
+{
+        bool Switch;
+        if (ritStatus==0) {Switch=true;}
+        else {Switch=false;}
+        pauseThread=true;
+        WaitForSingleObject(hPauseEvent, INFINITE);
+        if (!rit_on_off(hComm, RadioID, Switch)) { }
+        pauseThread=false;
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TForm1::SpeedButton4Click(TObject *Sender)
+{
+
+        direction=true;                       
+        pauseThread=true;
+        WaitForSingleObject(hPauseEvent, INFINITE);
+        rit_write_f(hComm, RadioID, ritFreq, direction);
+        pauseThread=false;
+
+}
+//---------------------------------------------------------------------------
+
+
+
+void __fastcall TForm1::SpeedButton3Click(TObject *Sender)
+{
+        direction=false;
+        pauseThread=true;
+        WaitForSingleObject(hPauseEvent, INFINITE);
+        rit_write_f(hComm, RadioID, ritFreq, direction);
+        pauseThread=false;
+}
+//---------------------------------------------------------------------------
+
+
+
+
+void __fastcall TForm1::Timer4Timer(TObject *Sender)
+{
+        if (readThreadRun==false)
+        {
+        Image1->Canvas->Brush->Color=clRed;
+        TRect rect(0, 0, 20, 20);
+        Image1->Canvas->FillRect(rect);
+        }
+        if (readThreadRun==true)
+        {
+        Image1->Canvas->Brush->Color=clGreen;
+        TRect rect(0, 0, 20, 20);
+        Image1->Canvas->FillRect(rect);
+        }
+
+        
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TForm1::SpeedButton6Click(TObject *Sender)
+{
+        KnobInit();        
+}
+//---------------------------------------------------------------------------
+
+
+void __fastcall TForm1::ComboBox3Change(TObject *Sender)
+{
+       Step=StrToInt(ComboBox3->Text);
+}
+//---------------------------------------------------------------------------
+
